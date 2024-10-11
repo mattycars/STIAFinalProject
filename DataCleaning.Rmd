@@ -1,0 +1,458 @@
+---
+title: "Data Cleaning"
+author: "Matthew Carswell"
+date: "2023-12-11"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Water Quality Data (Dataset 1)
+Let's load in our data.
+```{r}
+water <- read.csv('WaterQuality.csv')
+```
+
+
+Let's go ahead and take a look at the first few and last rows
+```{r}
+head(water)
+```
+
+```{r}
+tail(water)
+```
+
+We will remove the last two rows.
+```{r}
+water.clean <- water[-c(255694,255695),]
+```
+
+Now I want to save the sample date as a "date" character type and then order the data by date.
+```{r}
+library(dplyr)
+
+water.clean$SampleDate<-as.Date(water.clean$SampleDate,format = "%m/%d/%Y")
+water.clean <- water.clean %>% arrange(SampleDate)
+```
+
+
+We can see that our data actually contains the data from 152 different stations within the Lower James. We just want to look at one station, however. 
+
+```{r}
+unique(water.clean$Station)
+```
+```{r}
+water.subset<-water.clean[water.clean$Station=='TF5.2A',]
+```
+
+```{r}
+library(tidyr)
+
+# Pivot the data
+water.wide <- water.clean %>%
+  pivot_wider(names_from = Parameter, values_from = MeasureValue)
+```
+Take a mean measurement for duplicate date parameters. First I want to subset only the parameters of interest and make sure they are of type numeric. We have "NULL" for many of our observations that need to be stored as NA, so our columns can be coerced to type numeric.
+```{r}
+# Subsetting our data to only include our variables of interest
+water.wide.subset<-data.frame(water.wide[,c(9,11,14,29:50)])
+
+# Cleaning our variables of interest, so that instead of "NULL" or any other characters in any cell, we are replacing it with NA. Then, we are converting all of these columns to numeric type, so that we can aggregate our data in the next step.
+water.wide.subset <- water.wide.subset %>%
+  mutate(across(4:25, ~as.numeric(ifelse(grepl("^\\d+\\.?\\d*$", .x), .x, NA))))
+```
+
+In order to make this data real time series data that we can perform analyses on, we need to have just one measurement for each parameter at each Sample Date. 
+```{r}
+water.mean <- water.wide.subset %>%
+  group_by(SampleDate) %>%
+  summarize(across(everything(), mean, na.rm = TRUE))
+
+# Print the resulting data frame
+print(water.mean)
+```
+While we can see that we do not have data for every single variable at every date, we now do have a formidable dataset of which we can perform analyses upon. We just will have to ignore NA
+
+# Plankton Dataset (Dataset 2)
+Loading in our data
+```{r}
+plankton <- read.csv('Plankton.csv')
+
+# Removing last row
+plankton<-plankton[-241495,]
+
+# Saving SampleDate as a Date data type
+plankton$SampleDate<-as.Date(plankton$SampleDate,format = "%m/%d/%Y")
+plankton <- plankton %>% arrange(SampleDate)
+
+tail(plankton)
+```
+In this dataset, we can see that are a variety of different plankton species being recorded. Let's see how many different species are being recorded.
+```{r}
+length(unique(plankton$LatinName))
+```
+There are over 811 species being recorded which is A LOT. WIth the code below, I find the 5 most common species.
+
+```{r}
+frequency_table <- table(plankton$LatinName)
+
+most_common_values <- names(sort(frequency_table, decreasing = TRUE)[1:5])
+
+
+print(most_common_values)
+```
+We can see that *Pennales*, *Centrales*, *Cryptomonas*, *Green cells*, and *Blue green sphere*, are the 5 most common species. For the sake of this project, I am going to be aggregating all the species together as, to my understanding, the data contains counts for ALL plankton species in the water at the time of the specified date. Now, there could be issues with aggregating all the species together, but because I do not come from a marine biology background, I am going to ignore this caveat for the sake of this project.
+
+I want to perform an analysis on both plankton in the Lower James and also Lower Chesapeake, so I am going to break this dataset into two smaller datasets.
+```{r}
+lower.james <- plankton[plankton$CatalogingUnitDescription=="Lower James",]
+lower.chesapeake <- plankton[plankton$CatalogingUnitDescription=="Lower Chesapeake Bay",]
+```
+
+
+Now I will aggregate plankton counts by date for both the Lower James and Lower Chesapeake. In order to do this. The final aggregated datasets are only going to have two variables: SampleDate and ReportingValue.
+```{r}
+# Subsetting the data to be only SampleDate and ReportingValue
+lower.james.subset <-lower.james[,c(7,16)]
+lower.chesapeake.subset<- lower.chesapeake[,c(7,16)]
+
+# Summing plankton counts by date
+lower.james.agg <- lower.james.subset %>%
+  group_by(SampleDate) %>%
+  summarise(Count = sum(ReportingValue))
+
+lower.chesapeake.agg <- lower.chesapeake.subset %>%
+  group_by(SampleDate) %>%
+  summarise(Count = sum(ReportingValue))
+
+# Printing data
+head(lower.james.agg)
+head(lower.chesapeake.agg)
+```
+Let's go ahead and look at species count over time as well.
+```{r}
+# Summarizing based on SpeciesCount
+lower.james.agg.s <- lower.james.subset %>%
+  group_by(SampleDate) %>%
+  summarise(SpeciesCount = n())
+
+lower.chesapeake.agg.s <- lower.chesapeake.subset%>%
+  group_by(SampleDate) %>%
+  summarise(SpeciesCount = n())
+
+# Merging datasets that contain count and species count
+merged_james <- merge(lower.james.agg, lower.james.agg.s, by = "SampleDate", all = TRUE)
+merged_chesapeake <- merge(lower.chesapeake.agg, lower.chesapeake.agg.s, by = "SampleDate", all = TRUE)
+
+# Printing data
+head(merged_james)
+head(merged_chesapeake)
+```
+
+
+I will go ahead and export data for use in Matlab for easy usage.
+```{r}
+write.csv(water.mean,"../MATLAB/Water_Quality.csv")
+write.csv(merged_james,"../MATLAB/Lower_James.csv")
+write.csv(merged_chesapeake,"../MATLAB/Lower_Ches.csv")
+```
+
+
+
+
+# Exploratory Data Analysis (EDA)
+In this section of code, I will proceed to perform some preliminary EDA, which will involve making some initial plots in order to glean early insights into the patterns of water quality and plankton counts before trying to determine if there are significant trends or relationships between the two. 
+
+
+```{r}
+water.mean$SampleDate <- as.POSIXct(water.mean$SampleDate)
+
+par(mfrow = c(2, 3))
+
+selected_columns <- water.mean[, c(3, 4, 5, 10, 14, 15)]
+
+for (i in seq_along(selected_columns)) {
+  variable_name <- colnames(selected_columns)[i]
+  label <-c("Depth (feet)", "Dissolved Oxygen (mg/L)","pH", "Total Nitrogen (mg/L)", "Total Suspended Solids (mg/L)", "Temperateure (Degrees Celcius)")
+  
+  # Plotting time series for the current variable, ignoring NAs
+  matplot(water.mean$SampleDate, selected_columns[, i], type = "l", lty = 1,
+       xlab = "Sample Date", ylab = "",
+       main = paste("Time Series Plot for", variable_name),
+       col = i)
+   mtext(side = 2, text = label[i], line = 2, cex=0.6)
+}
+```
+
+```{r}
+# Convert SampleDate to POSIXct format
+lower.james.agg$SampleDate <- as.POSIXct(lower.james.agg$SampleDate)
+lower.chesapeake.agg$SampleDate <- as.POSIXct(lower.chesapeake.agg$SampleDate)
+
+# Set up the plotting area
+par(mfrow = c(2, 2), mar = c(4, 4, 2, 1), oma = c(0, 0, 2, 0))
+
+# Plot lower.james.agg - Count
+matplot(na.omit(merged_james$SampleDate), na.omit(merged_james$Count), type = "l",
+        xlab = "Sample Date", ylab = "Count", col = "blue", main = "Lower James Plankton - Count")
+
+# Plot lower.james.agg - SpeciesCount
+matplot(na.omit(merged_james$SampleDate), na.omit(merged_james$SpeciesCount), type = "l",
+        xlab = "Sample Date", ylab = "SpeciesCount", col = "blue", main = "Lower James Plankton Species Count")
+
+
+# Plot lower.chesapeake.agg - Count
+matplot(na.omit(merged_chesapeake$SampleDate), na.omit(merged_chesapeake$Count), type = "l",
+        xlab = "Sample Date", ylab = "Count", col = "red", main = "Chesapeake Plankton - Count")
+
+
+# Plot lower.chesapeake.agg - SpeciesCount
+matplot(na.omit(merged_chesapeake$SampleDate), na.omit(merged_chesapeake$SpeciesCount), type = "l",
+        xlab = "Sample Date", ylab = "SpeciesCount", col = "red", main = "Chesapeake Plankton Species Count")
+
+
+
+```
+
+# Looking at correlations
+Now, we are going to look and see if our Phytoplankton counts/species counts are correlated at all with any our parameters depth, dissolved oxygen (DO), pH, total Nitrogen (TN), total suspended solids (TSS), and/or water temperature (WTEMP). In order to accomplish this task, we need to make sure that all of our variables of interest exist on the exact same time scale. Because sample dates differ for the water.mean data and both the Lower Chesapeake and Lower James plankton datasets, I am going to the mean for each month for the 3 datasets for all months they have in common, March 1986 to December 2021.
+
+```{r}
+# Choosing the parameters we want from water.mean
+filtered_water <- water.mean[, c(1, 3, 4, 5, 10, 14, 15)]
+
+# Filter data for the relevant period (March 1986 to December 2021)
+filtered_water <- filtered_water %>%
+  filter(SampleDate >= as.Date("1986-03-01") & SampleDate <= as.Date("2021-12-31"))
+
+# Water Quality means
+monthly_water <- filtered_water %>%
+  group_by(Year = lubridate::year(SampleDate), Month = lubridate::month(SampleDate)) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+
+# Fill in missing months with the mean of the previous month
+monthly_water_filled <- monthly_water %>%
+  complete(Month = 1:12) %>%
+  group_by(Year) %>%
+  fill(everything(), .direction = "downup")
+
+# Display result
+head(monthly_water_filled)
+```
+Perfect. Now we will do the same thing for our plankton data and then join all of our data into one dataframe.
+```{r}
+# Filter data for the relevant period (March 1986 to December 2021)
+filtered_james <- merged_james %>%
+  filter(SampleDate >= as.Date("1986-03-01") & SampleDate <= as.Date("2021-12-31"))
+
+# Water Quality means
+monthly_james <- filtered_james %>%
+  group_by(Year = lubridate::year(SampleDate), Month = lubridate::month(SampleDate)) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+
+# Fill in missing months with the mean of the previous month
+monthly_james_filled <- monthly_james %>%
+  complete(Month = 1:12) %>%
+  group_by(Year) %>%
+  fill(everything(), .direction = "downup")
+
+# Display result
+head(monthly_james_filled)
+```
+```{r}
+# Filter data for the relevant period (March 1986 to December 2021)
+filtered_chesapeake <- merged_chesapeake %>%
+  filter(SampleDate >= as.Date("1986-03-01") & SampleDate <= as.Date("2021-12-31"))
+
+# Water Quality means
+monthly_chesapeake <- filtered_chesapeake %>%
+  group_by(Year = lubridate::year(SampleDate), Month = lubridate::month(SampleDate)) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+
+# Fill in missing months with the mean of the previous month
+monthly_chesapeake_filled <- monthly_chesapeake %>%
+  complete(Month = 1:12) %>%
+  group_by(Year) %>%
+  fill(everything(), .direction = "downup")
+
+# Display result
+head(monthly_chesapeake_filled)
+```
+```{r}
+# Joining all of our data
+# Join water and James data
+monthly_all_intermediate <- inner_join(monthly_water_filled, 
+                                       monthly_james_filled, by = c("Year", "Month"))
+
+# Merge the result with Chesapeake data
+monthly_all <- inner_join(monthly_all_intermediate, 
+                          monthly_chesapeake_filled, by = c("Year", "Month"))
+
+# Print the final result
+print(monthly_all)
+```
+
+NOW, we can go ahead create some CCF plots. Before we are able to make and interpret CCF plots, we need to ensure all of our data of interest is stationary.
+```{r}
+# List of features and target variables
+variables <- c("Depth", "DO", "PH", "TN", "TSS", "WTEMP", "Count.x", "SpeciesCount.x", "Count.y", "SpeciesCount.y")
+
+# Set up the plotting area
+par(mfrow = c(5, 2), mar = c(3, 3, 1, 1))
+
+# Loop through variables to create time series plots
+for (variable in variables) {
+  # Create time series plot
+  matplot(monthly_all$SampleDate, monthly_all[[variable]], type = "l", col = 1, lty = 1,
+          xlab = "Sample Date", ylab = variable, main = paste("Time Series Plot for", variable))
+}
+# Reset the plotting area
+par(mfrow = c(1, 1), mar = c(5, 4, 4, 2) + 0.1)
+```
+There are strong arguments to be made that the only stationary datasets are DO and WTEMP. Let's go ahead and apply the first difference to the rest of the variables and the re-visualize these plots.
+```{r}
+# List of variables to difference
+variables <- c("Depth", "PH", "TN", "TSS", "Count.x", "SpeciesCount.x", "Count.y", "SpeciesCount.y")
+
+# Apply first difference to each variable
+for (variable in variables) {
+  # Calculate differences and remove the first row
+  monthly_all[[paste0("diff_", variable)]] <- c(0, diff(monthly_all[[variable]]))
+}
+```
+
+```{r}
+# Set up the plotting area
+par(mfrow = c(4, 2), mar = c(3, 3, 1, 1))
+
+# Loop through variables to create time series plots
+for (variable in variables) {
+  # Calculate differences and remove the first row
+  monthly_all[[paste0("diff_", variable)]] <- c(0, diff(monthly_all[[variable]]))
+  
+  # Create time series plot
+  matplot(monthly_all$SampleDate, monthly_all[[paste0("diff_", variable)]], type = "l",
+          xlab = "Sample Date", ylab = paste0("diff_", variable),
+          main = paste("Time Series Plot for diff_", variable))
+}
+# Reset the plotting area
+par(mfrow = c(1, 1), mar = c(5, 4, 4, 2) + 0.1)
+```
+NOW it appears as though ALL our data are stationary processes, so now we can make some CCF plots with full interpretability.
+
+```{r}
+features <- c("diff_Depth", "DO", "diff_PH", "diff_TN", "diff_TSS", "WTEMP")
+targets <- c("diff_Count.x", "diff_SpeciesCount.x", "diff_Count.y", "diff_SpeciesCount.y")
+
+# Set up the plotting area
+par(mfrow = c(length(features), length(targets)), mar = c(3, 3, 1, 1))
+
+# Loop through features and targets to create CCF plots
+for (i in 1:length(features)) {
+  for (j in 1:length(targets)) {
+    feature <- features[i]
+    target <- targets[j]
+    
+    # Create CCF plot
+    ccf_plot <- ccf(monthly_all[[feature]], monthly_all[[target]], main = paste("CCF -", feature, "-", target))
+    
+    # Add labels
+    xlabel <- paste("Lag (", feature, ")")
+    ylabel <- paste("CCF (", target, ")")
+    title(main = paste("CCF -", feature, "-", target), xlab = xlabel, ylab = ylabel)
+  }
+}
+
+```
+# Export Data for PCA Analysis in Python
+We are going to export our features (not our target variables that map plankton counts as PCA is a feature selection process). R can do PCA, but I prefer it Python as run time is usually better and can provide better visualizations. 
+
+```{r}
+feature_data <- monthly_all[,c(3, 4, 5, 10, 14, 15)]
+# It should be noted that I run Python in a Linux subsystem on my computer
+
+write.csv(feature_data,"\\\\wsl.localhost\\Ubuntu\\home\\mcarswell\\STIA Final Project\\feature_data.csv")
+```
+
+# Building an ARIMA model for Future Forecasting
+```{r}
+library(forecast)
+```
+
+```{r}
+# Create a data tibble (easier to work with in this situation) out of variables of interest
+subset_columns <- c("SampleDate","Depth", "DO", "PH", "TN", "TSS", "WTEMP", "SpeciesCount.x")
+data_tibble <- as_tibble(monthly_all[,subset_columns])
+
+# Convert SampleDate to a proper date format
+data_tibble$SampleDate <- as.Date(data_tibble$SampleDate, format = "%Y-%m-%d")
+
+# Calculate 5-year rolling mean for actual values
+data_tibble$SmoothedActual <- zoo::rollmean(data_tibble$SpeciesCount.x, k = 5*12, fill = NA)
+
+# Split the data into training and testing sets
+train_size <- floor(0.8 * nrow(data_tibble))
+train_data <- data_tibble[1:train_size, ]
+test_data <- data_tibble[(train_size + 1):nrow(data_tibble), ]
+
+# Fit ARIMA model
+arima_model <- auto.arima(train_data$SpeciesCount.x)
+
+# Forecast using the ARIMA model
+forecast_values <- forecast(arima_model, h = length(test_data$SpeciesCount.x))
+
+# Plot the results
+plot(data_tibble$SampleDate, data_tibble$SpeciesCount.x, type = "l", col = "red", xlab = "SampleDate", ylab = "Lower James Plankton SpeciesCount", main = "ARIMA Model Forecast and 5-Year Smoothed Values - James", ylim = range(data_tibble$SpeciesCount.x, forecast_values$mean, na.rm = TRUE))
+lines(test_data$SampleDate, test_data$SpeciesCount.x, col = "red", lty = 2)
+lines(data_tibble$SampleDate, data_tibble$SmoothedActual, col = "green", lty = 1)
+lines(data_tibble$SampleDate[(train_size + 1):nrow(data_tibble)], forecast_values$mean, col = "blue", lty = 1)
+legend("topright", legend = c("Actual", "Smoothed Actual", "Forecast"), col = c("red", "green", "blue"), lty = c(2, 1, 1))
+```
+```{r}
+# Calculate accuracy measures
+accuracy_measures <- accuracy(forecast_values, test_data$SpeciesCount.x)
+
+# Print accuracy measures
+print(accuracy_measures)
+```
+Now I will do the same thing for Chesapeake Plankton Species Count
+```{r}
+# Create a data tibble (easier to work with in this situation) out of variables of interest
+subset_columns <- c("SampleDate","Depth", "DO", "PH", "TN", "TSS", "WTEMP", "SpeciesCount.y")
+data_tibble <- as_tibble(monthly_all[,subset_columns])
+
+# Convert SampleDate to a proper date format
+data_tibble$SampleDate <- as.Date(data_tibble$SampleDate, format = "%Y-%m-%d")
+
+# Calculate 5-year rolling mean for actual values
+data_tibble$SmoothedActual <- zoo::rollmean(data_tibble$SpeciesCount.y, k = 5*12, fill = NA)
+
+# Split the data into training and testing sets
+train_size <- floor(0.8 * nrow(data_tibble))
+train_data <- data_tibble[1:train_size, ]
+test_data <- data_tibble[(train_size + 1):nrow(data_tibble), ]
+
+# Fit ARIMA model
+arima_model <- auto.arima(train_data$SpeciesCount.y)
+
+# Forecast using the ARIMA model
+forecast_values <- forecast(arima_model, h = length(test_data$SpeciesCount.y))
+
+# Plot the results
+plot(data_tibble$SampleDate, data_tibble$SpeciesCount.y, type = "l", col = "red", xlab = "SampleDate", ylab = "Chesapeake Plankton SpeciesCount", main = "ARIMA Model Forecast and 5-Year Smoothed Values - Chesapeake", ylim = range(data_tibble$SpeciesCount.y, forecast_values$mean, na.rm = TRUE))
+lines(test_data$SampleDate, test_data$SpeciesCount.y, col = "red", lty = 2)
+lines(data_tibble$SampleDate, data_tibble$SmoothedActual, col = "green", lty = 1)
+lines(data_tibble$SampleDate[(train_size + 1):nrow(data_tibble)], forecast_values$mean, col = "blue", lty = 1)
+legend("topright", legend = c("Actual", "Smoothed Actual", "Forecast"), col = c("red", "green", "blue"), lty = c(2, 1, 1))
+```
+```{r}
+# Calculate accuracy measures
+accuracy_measures <- accuracy(forecast_values, test_data$SpeciesCount.y)
+
+# Print accuracy measures
+print(accuracy_measures)
+```
+
